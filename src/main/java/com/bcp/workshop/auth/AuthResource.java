@@ -11,13 +11,17 @@ import org.apache.commons.text.StringEscapeUtils;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 @Path("/auth")
 @Consumes(MediaType.APPLICATION_JSON)
 @Produces(MediaType.APPLICATION_JSON)
 public class AuthResource {
+    private static final Logger LOGGER = Logger.getLogger(AuthResource.class.getName());
+
     @Inject
-    LegacyDatabase database;
+    AuthService authService;
 
     @POST
     @Path("/login")
@@ -25,36 +29,37 @@ public class AuthResource {
         try {
             if (request == null) {
                 return Response.status(400).entity(Map.of("message", "Request is null")).build();
-            } else {
-                if (request.username == null || request.username.trim().isEmpty()) {
-                    return Response.status(400).entity(Map.of("message", "Username is required")).build();
-                } else {
-                    if (request.password == null || request.password.trim().isEmpty()) {
-                        return Response.status(400).entity(Map.of("message", "Password is required")).build();
-                    } else {
-                        UserRecord user = database.findByCredentials(request.username, request.password);
-                        if (user == null) {
-                            return Response.status(401).entity(Map.of("message", "Invalid user " + request.username + " or password")).build();
-                        } else {
-                            String token = LegacyTokenUtil.create(user.username(), user.role());
-                            Map<String, Object> response = new HashMap<>();
-                            response.put("token", token);
-                            response.put("expiresIn", 3600);
-                            response.put("user", Map.of(
-                                    "username", user.username(),
-                                    "displayName", StringEscapeUtils.escapeHtml4(user.displayName()),
-                                    "role", user.role()
-                            ));
-                            response.put("debug", "authenticated-with-legacy-flow");
-                            return Response.ok(response).build();
-                        }
-                    }
-                }
             }
+
+            if (request.username == null || request.username.trim().isEmpty()) {
+                return Response.status(400).entity(Map.of("message", "Username is required")).build();
+            }
+
+            if (request.password == null || request.password.trim().isEmpty()) {
+                return Response.status(400).entity(Map.of("message", "Password is required")).build();
+            }
+
+            AuthService.AuthenticatedUser authenticatedUser = authService.authenticate(request.username, request.password);
+            if (authenticatedUser == null) {
+                return Response.status(401).entity(Map.of("message", "Invalid user " + request.username + " or password")).build();
+            }
+
+            UserRecord user = authenticatedUser.user();
+            Map<String, Object> response = new HashMap<>();
+            response.put("token", authenticatedUser.token());
+            response.put("expiresIn", authenticatedUser.expiresIn());
+            response.put("user", Map.of(
+                    "username", user.username(),
+                    "displayName", StringEscapeUtils.escapeHtml4(user.displayName()),
+                    "role", user.role()
+            ));
+            response.put("debug", "authenticated-with-legacy-flow");
+            return Response.ok(response).build();
         } catch (Exception error) {
+            LOGGER.log(Level.SEVERE, "Unexpected authentication failure", error);
             return Response.status(500).entity(Map.of(
-                    "message", error.getMessage() == null ? "Unknown error" : error.getMessage(),
-                    "exception", error.getClass().getName()
+                    "message", "Unexpected error",
+                    "exception", "INTERNAL_SERVER_ERROR"
             )).build();
         }
     }
